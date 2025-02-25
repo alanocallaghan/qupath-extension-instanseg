@@ -143,7 +143,7 @@ public class InstanSegController extends BorderPane {
 
     private List<InstanSegModel> remoteModels;
 
-    private BooleanProperty requestingPyTorch = new SimpleBooleanProperty(false);
+    private final BooleanProperty requestingPyTorch = new SimpleBooleanProperty(false);
 
     // Listener for property changes in the current ImageData; these can be required to update the input channels
     private final PropertyChangeListener imageDataPropertyChangeListener = this::handleImageDataPropertyChange;
@@ -249,9 +249,7 @@ public class InstanSegController extends BorderPane {
         infoButton.disableProperty().bind(selectedModelIsAvailable.not());
         WebView webView = WebViews.create(true);
         PopOver infoPopover = new PopOver(webView);
-        infoButton.setOnAction(e -> {
-            parseMarkdown(selectedModel.get(), webView, infoButton, infoPopover);
-        });
+        infoButton.setOnAction(e -> parseMarkdown(selectedModel.get(), webView, infoButton, infoPopover));
     }
 
     private void configureDownloadButton() {
@@ -382,7 +380,6 @@ public class InstanSegController extends BorderPane {
                     comboInputChannels.getCheckModel().checkIndices(0, 1, 2);
                 }
             }
-
         }
     }
 
@@ -481,19 +478,21 @@ public class InstanSegController extends BorderPane {
      * This may be called when the selected model is changed, or an existing model is downloaded.
      */
     private void refreshModelChoice() {
+        var modelDir = InstanSegUtils.getModelDirectory().orElse(null);
+        if (modelDir == null)
+            return;
+
         var model = selectedModel.get();
         if (model == null)
             return;
 
-        var modelDir = InstanSegUtils.getModelDirectory().orElse(null);
         try {
             model.checkIfDownloaded(modelDir.resolve("downloaded"), false);
         } catch (IOException e) {
             logger.debug("Error checking zip or RDF file(s); this shouldn't happen", e);
             Dialogs.showErrorNotification(resources.getString("title"), resources.getString("error.checkingModel"));
         }
-        boolean isDownloaded = modelDir != null && model.isValid();
-        if (!isDownloaded || qupath.getImageData() == null) {
+        if (!model.isValid() || qupath.getImageData() == null) {
             return;
         }
         var numChannels = model.getNumChannels();
@@ -512,7 +511,7 @@ public class InstanSegController extends BorderPane {
 
     /**
      * Try to download the currently-selected model in another thread.
-     * @return
+     * @return A Future that is completed when the download finishes.
      */
     private CompletableFuture<InstanSegModel> downloadSelectedModelAsync() {
         var model = selectedModel.get();
@@ -524,8 +523,8 @@ public class InstanSegController extends BorderPane {
 
     /**
      * Try to download the specified model in another thread.
-     * @param model
-     * @return
+     * @param model The model
+     * @return A future that is completed when the download finishes.
      */
     private CompletableFuture<InstanSegModel> downloadModelAsync(InstanSegModel model) {
         var modelDir = InstanSegUtils.getModelDirectory().orElse(null);
@@ -539,9 +538,9 @@ public class InstanSegController extends BorderPane {
 
     /**
      * Try to download the specified model to the given directory in the current thread.
-     * @param model
-     * @param modelDir
-     * @return
+     * @param model The model.
+     * @param modelDir The model directory.
+     * @return The downloaded model.
      */
     private InstanSegModel downloadModel(InstanSegModel model, Path modelDir) {
         Objects.requireNonNull(modelDir);
@@ -575,10 +574,8 @@ public class InstanSegController extends BorderPane {
 
         // If the markdown doesn't start with a title, pre-pending the model title & description (if available)
         if (!body.startsWith("#")) {
-            var sb = new StringBuilder();
-            sb.append("## ").append(model.getName()).append("\n\n");
-            sb.append("----\n\n");
-            doc.prependChild(parser.parse(sb.toString()));
+            String sb = "## " + model.getName() + "\n\n----\n\n";
+            doc.prependChild(parser.parse(sb));
         }
         webView.getEngine().loadContent(HtmlRenderer.builder().build().render(doc));
         infoPopover.show(infoButton);
@@ -624,6 +621,7 @@ public class InstanSegController extends BorderPane {
             }
         }
         InputStream in = InstanSegController.class.getResourceAsStream("model-index.json");
+        assert in != null;
         String cont = new BufferedReader(new InputStreamReader(in))
                 .lines()
                 .collect(Collectors.joining("\n"));
