@@ -5,7 +5,7 @@ plugins {
 
 qupathExtension {
     name = "qupath-extension-instanseg"
-    version = "0.1.0-SNAPSHOT"
+    version = "0.1.0-rc1"
     group = "io.github.qupath"
     description = "A QuPath extension for running inference with the InstanSeg deep learning model"
     automaticModule = "qupath.extension.instanseg"
@@ -20,7 +20,7 @@ dependencies {
 
     implementation(libs.bioimageio.spec)
     implementation(libs.deepJavaLibrary)
-    implementation("io.github.qupath:qupath-extension-djl:0.4.0-SNAPSHOT")
+    implementation("io.github.qupath:qupath-extension-djl:0.4.0-20250325.161420-4")
 
     // For testing
     testImplementation(libs.junit)
