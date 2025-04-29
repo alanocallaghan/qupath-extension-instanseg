@@ -672,6 +672,39 @@ public class InstanSeg {
         }
 
         /**
+         * Output whatever the default object type for the model is: probably cells for nuclei + cell models, nuclei for everything else.
+         * @return this builder
+         */
+        private Builder outputDefault() {
+            this.preferredOutputType = null;
+            return this;
+        }
+
+
+        /**
+         * Set the output type based on a string value.
+         * @param outputType the type of output (usually cell, annotation or detection)
+         * @return this builder.
+         */
+        public Builder outputType(String outputType) {
+            switch(OutputType.fromString(outputType)) {
+                case CELL -> {
+                    return this.outputCells();
+                }
+                case DETECTION -> {
+                    return this.outputDetections();
+                }
+                case ANNOTATION -> {
+                    return this.outputAnnotations();
+                }
+                case DEFAULT -> {
+                    return this.outputDefault();
+                }
+                default -> throw new IllegalArgumentException("Unknown output type");
+            }
+        }
+
+        /**
          * Set a number of optional arguments
          * @param optionalArgs The argument names and values.
          * @return A modified builder.
@@ -680,7 +713,6 @@ public class InstanSeg {
             this.optionalArgs.putAll(optionalArgs);
             return this;
         }
-
 
         /**
          * Set a number of optional arguments
@@ -692,8 +724,6 @@ public class InstanSeg {
             this.optionalArgs.put(key, value);
             return this;
         }
-
-
 
         /**
          * Request to make measurements from the objects created by InstanSeg.
@@ -712,6 +742,46 @@ public class InstanSeg {
             return new InstanSeg(this);
         }
 
+    }
+
+    /**
+     * Possible output types for InstanSeg
+     */
+    public enum OutputType {
+        /**
+         * Output possibly nested annotations
+         */
+        ANNOTATION,
+        /**
+         * Output possibly nested detections
+         */
+        DETECTION,
+        /**
+         * Output possibly cells that may or may not have a nucleus
+         */
+        CELL,
+        /**
+         * Whatever the default model behaviour is.
+         */
+        DEFAULT;
+
+        /**
+         * Fetch the output type matching a string value.
+         * @param outputType the string input, possibly containing trailing whitespace; can be plural
+         * @return the matching output type, if we can find it; otherwise an exception
+         */
+        public static OutputType fromString(String outputType) {
+            outputType = outputType.strip();
+            if (outputType.endsWith("s")) {
+                outputType = outputType.substring(0, outputType.length() - 1);
+            }
+            for (var type: values()) {
+                if (type.toString().equalsIgnoreCase(outputType)) {
+                    return type;
+                }
+            }
+            throw new IllegalArgumentException("Unknown output type: " + outputType);
+        }
     }
 
 }
