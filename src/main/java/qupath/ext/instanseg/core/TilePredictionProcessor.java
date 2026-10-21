@@ -2,6 +2,17 @@ package qupath.ext.instanseg.core;
 
 import ai.djl.inference.Predictor;
 import ai.djl.translate.TranslateException;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
+import org.apposed.appose.Appose;
+import org.apposed.appose.BuildException;
+import org.apposed.appose.Environment;
+import org.apposed.appose.NDArray;
+import org.apposed.appose.Service;
+import org.apposed.appose.TaskException;
 import org.bytedeco.opencv.global.opencv_core;
 import org.bytedeco.opencv.opencv_core.Mat;
 import org.slf4j.Logger;
@@ -128,53 +139,94 @@ class TilePredictionProcessor implements Processor<Mat, Mat, Mat[]> {
         );
         mat = preprocessing.apply(mat);
 
-        Padding padding = null;
+        Padding padding;
         if (doPadding && inputHeight > 0 && inputWidth > 0 && (mat.rows() < inputHeight || mat.cols() < inputWidth)) {
             padding = Padding.getPadding(0, Math.max(0, inputWidth - mat.cols()), 0, Math.max(0, inputHeight - mat.rows()));
             var mat2 = new Mat();
             opencv_core.copyMakeBorder(mat, mat2, padding.getY1(), padding.getY2(), padding.getX1(), padding.getX2(), opencv_core.BORDER_REFLECT101);
             mat = mat2;
+        } else {
+            padding = null;
         }
 
-        Predictor<Mat, Mat[]> predictor = null;
+
+        var nda = NDArrays.matToNDArray(mat);
+        var cal = params.getServer().getPixelCalibration();
+        var cal2 = cal.createScaledInstance(params.getRegionRequest().getDownsample(), params.getRegionRequest().getDownsample());
+
+
+        Map<String, Object> inputs = Map.of("ndarray", nda, "pixel_size", cal2.getAveragedPixelSizeMicrons());
+        String model = params.getImageData().isBrightfield() ? "brightfield_nuclei" : "fluorescence_nuclei_and_cells";
+        String pythonScript = String.format("""
+from instanseg import InstanSeg
+from appose import NDArray
+import numpy as np
+
+ins = InstanSeg("%s")
+# inputs["ndarray"] is automagically assigned in the global python environment
+ins_output = ins.eval_medium_image(ndarray.ndarray(), return_image_tensor=False, pixel_size=pixel_size).numpy()
+
+# appose's shared memory array from the python side
+nda = NDArray(dtype="uint16", shape=ins_output.shape)
+# create a np.ndarray-like view on the ndarray buffer
+nda_np = nda.ndarray()
+# copy the instanseg output into the ndarray buffer
+nda_np[:] = ins_output
+# return the ndarray view on the shared memory
+task.outputs["instanseg_output"] = nda
+""", model);
+
+        Environment env = null;
         try {
-            predictor = predictors.take();
-            logger.debug("Predicting tile {}", mat);
-            var matOutput = predictor.predict(mat);
-
-            // These are useful for spotting issues with the model
-            if (System.getProperty("instanseg.debug.predictions", "false").equalsIgnoreCase("true")) {
-                OpenCVTools.matToImagePlus("Input " + params.getRegionRequest(), mat).show();
-                OpenCVTools.matToImagePlus("Output " + params.getRegionRequest(), matOutput).show();
-            }
-
-            // Handle the first output (labels)
-            // There may be other outputs (classiications, features), but we don't handle those here
-            matOutput[0].convertTo(matOutput[0], opencv_core.CV_32S);
-            if (padding != null)
-                matOutput[0] = OpenCVTools.crop(matOutput[0], padding);
-
-            return matOutput;
-        } catch (TranslateException e) {
-            nTilesFailed.incrementAndGet();
-            logger.error("Error in prediction", e);
-        } catch (InterruptedException | IllegalStateException e) {
-            // illegal state exception comes when ndmanager is closed from another thread (I think)
-            nTilesFailed.incrementAndGet();
-            wasInterrupted.set(true);
-            logger.debug("Prediction interrupted", e);
-        } finally {
-            if (predictor != null) {
-                try {
-                    predictors.put(predictor);
-                } catch (InterruptedException e) {
-                    logger.warn("Tiling interrupted");
-                }
-            }
-            nTilesProcessed.incrementAndGet();
-            nPixelsProcessed.addAndGet(nPixels);
+            env = Appose.pixi(NDArrays.class.getResource("pixi.toml")).build();
+        } catch (BuildException e) {
+            throw new RuntimeException(e);
         }
-        return null;
+
+        CompletableFuture<Mat> future = new CompletableFuture<>();
+
+        try (Service python = env.python().init("import numpy")) {
+            Service.Task task = python.task(pythonScript, inputs);
+            task.listen(event -> {
+                switch (event.responseType) {
+                    case UPDATE:
+                        logger.info("Progress: " + event.current + "/" + event.maximum);
+                        break;
+                    case COMPLETION:
+                        logger.info("Task complete. Result: " + task.outputs);
+                        var isOutput = (NDArray) task.outputs.get("instanseg_output");
+                        // todo: general method to convert back to mat or BI
+                        Mat matOutput = NDArrays.ndArrayToMat(isOutput);
+                        if (padding != null)
+                            matOutput = OpenCVTools.crop(matOutput, padding);
+                        future.complete(matOutput);
+                        break;
+                    case CANCELATION:
+                        logger.info("Task canceled");
+                        future.complete(null);
+                        break;
+                    case FAILURE:
+                        logger.error("Task failed: " + task.error);
+                        future.complete(null);
+                        break;
+                    case CRASH:
+                        logger.error("Task crashed:" + task.error);
+                        future.complete(null);
+                        break;
+                }
+            });
+            task.start();
+//            Thread.sleep(1000);
+            if (!task.status.isFinished()) {
+                // Task is taking too long; request a cancelation.
+                task.cancel();
+            }
+            task.waitFor();
+            return new Mat[]{future.join()};
+        } catch (TaskException | InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+
     }
 
     /**

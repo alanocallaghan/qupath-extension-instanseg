@@ -1,0 +1,16 @@
+[workspace]
+name = "instanseg-fiji"
+channels = ["conda-forge"]
+platforms = ["linux-64", "win-64"]
+
+[dependencies]
+python = "3.11.*"
+
+[pypi-options]
+extra-index-urls = ["https://download.pytorch.org/whl/cu132"]
+
+[pypi-dependencies]
+appose = "*"
+instanseg-torch = "*"
+torch = { version = "*", index = "https://download.pytorch.org/whl/cu132" }
+torchvision = { version = "*", index = "https://download.pytorch.org/whl/cu132" }

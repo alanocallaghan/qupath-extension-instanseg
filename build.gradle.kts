@@ -13,6 +13,8 @@ qupathExtension {
 
 dependencies {
 
+    implementation("org.apposed:appose:0.12.0")
+
     implementation(libs.bundles.qupath)
     implementation(libs.bundles.logging)
     implementation(libs.qupath.fxtras)

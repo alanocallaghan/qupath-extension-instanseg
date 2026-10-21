@@ -25,7 +25,7 @@ import java.util.Objects;
  * Note that this is inherently limited to 'small' detections, where the entire ROI can be loaded into memory.
  * It does not support measuring arbitrarily large regions at a high resolution.
  */
-class DetectionMeasurer {
+public class DetectionMeasurer {
 
     private static final Logger logger = LoggerFactory.getLogger(DetectionMeasurer.class);
 
