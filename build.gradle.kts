@@ -22,7 +22,6 @@ dependencies {
 
     implementation(libs.bioimageio.spec)
     implementation(libs.deepJavaLibrary)
-    implementation("io.github.qupath:qupath-extension-djl:0.4.0")
 
     // For testing
     testImplementation(libs.junit)

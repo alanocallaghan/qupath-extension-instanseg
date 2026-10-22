@@ -1,19 +1,13 @@
 package qupath.ext.instanseg.core;
 
-import ai.djl.Device;
-import ai.djl.inference.Predictor;
-import ai.djl.ndarray.BaseNDManager;
-import ai.djl.repository.zoo.Criteria;
-import ai.djl.training.util.ProgressBar;
-import java.util.Comparator;
 import java.util.Random;
+import org.apposed.appose.BuildException;
+import org.apposed.appose.TaskException;
 import org.bytedeco.opencv.global.opencv_core;
 import org.bytedeco.opencv.opencv_core.Mat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.bioimageio.spec.tensor.OutputTensor;
-import qupath.lib.common.ColorTools;
-import qupath.lib.common.LogTools;
 import qupath.lib.experimental.pixels.OpenCVProcessor;
 import qupath.lib.experimental.pixels.OutputHandler;
 import qupath.lib.experimental.pixels.Parameters;
@@ -63,7 +57,7 @@ public class InstanSeg {
     private final boolean makeMeasurements;
     private final List<ColorTransforms.ColorTransform> inputChannels;
     private final InstanSegModel model;
-    private final Device device;
+    private final String device;
     private final TaskRunner taskRunner;
     private final Class<? extends PathObject> preferredOutputType;
     private final Map<String, Object> optionalArgs = new LinkedHashMap<>();
@@ -225,68 +219,52 @@ public class InstanSeg {
         // If no input channels are specified, use all channels
         var inputChannels = getInputChannels(imageData);
 
-        try (var model = Criteria.builder()
-                .setTypes(Mat.class, Mat[].class)
-                .optModelUrls(String.valueOf(modelPath.toUri()))
-                .optProgress(new ProgressBar())
-                .optDevice(device) // Remove this line if devices are problematic!
-                .optTranslator(new MatTranslator(layout, layoutOutput, outputChannelArray, optionalArgs))
-                .build()
-                .loadModel()) {
+        BlockingQueue<ApposePredictor> predictors = new ArrayBlockingQueue<>(nPredictors);
 
-            BaseNDManager baseManager = (BaseNDManager)model.getNDManager();
-            printResourceCount("Resource count before prediction",
-                    (BaseNDManager)baseManager.getParentManager());
-            BlockingQueue<Predictor<Mat, Mat[]>> predictors = new ArrayBlockingQueue<>(nPredictors);
-
-            try {
-                for (int i = 0; i < nPredictors; i++) {
-                    predictors.put(model.newPredictor());
-                }
-
-                printResourceCount("Resource count after creating predictors",
-                        (BaseNDManager)baseManager.getParentManager());
-
-                var tiler = createTiler(downsample, tileDims, padding);
-                var predictionProcessor = createProcessor(predictors, inputChannels, tileDims, padToInputSize);
-                var outputHandler = createOutputHandler(preferredOutputType, randomColors, boundaryThreshold, outputTensors);
-                var postProcessor = createPostProcessor(randomColors);
-                var processor = new PixelProcessor.Builder<Mat, Mat, Mat[]>()
-                        .processor(predictionProcessor)
-                        .maskSupplier(OpenCVProcessor.createMatMaskSupplier())
-                        .imageSupplier((parameters) -> ImageOps.buildImageDataOp(inputChannels)
-                                .apply(parameters.getImageData(), parameters.getRegionRequest()))
-                        .tiler(tiler)
-                        .outputHandler(outputHandler)
-                        .padding((int)Math.round(padding * downsample))
-                        .postProcess(postProcessor)
-                        .downsample(downsample)
-                        .build();
-
-                processor.processObjects(taskRunner, imageData, pathObjects);
-                int nObjects = pathObjects.stream().mapToInt(PathObject::nChildObjects).sum();
-                if (predictionProcessor instanceof TilePredictionProcessor tileProcessor) {
-                    return new InstanSegResults(
-                            tileProcessor.getPixelsProcessedCount(),
-                            tileProcessor.getTilesProcessedCount(),
-                            tileProcessor.getTilesFailedCount(),
-                            nObjects,
-                            System.currentTimeMillis() - startTime,
-                            tileProcessor.wasInterrupted()
-                    );
-                } else {
-                    return InstanSegResults.emptyInstance();
-                }
-            } finally {
-                for (var predictor: predictors) {
-                    predictor.close();
-                }
-                printResourceCount("Resource count after prediction", (BaseNDManager)baseManager.getParentManager());
+        try {
+            for (int i = 0; i < nPredictors; i++) {
+                var predictor = ApposePredictor.create(modelPath, device);
+                predictors.put(predictor);
             }
-        } catch (Exception e) {
-            logger.error("Error running InstanSeg", e);
+
+            var tiler = createTiler(downsample, tileDims, padding);
+            var predictionProcessor = createProcessor(predictors, inputChannels, tileDims, padToInputSize);
+            var outputHandler = createOutputHandler(preferredOutputType, randomColors, boundaryThreshold, outputTensors);
+            var postProcessor = createPostProcessor(randomColors);
+            var processor = new PixelProcessor.Builder<Mat, Mat, Mat[]>()
+                    .processor(predictionProcessor)
+                    .maskSupplier(OpenCVProcessor.createMatMaskSupplier())
+                    .imageSupplier((parameters) -> ImageOps.buildImageDataOp(inputChannels)
+                            .apply(parameters.getImageData(), parameters.getRegionRequest()))
+                    .tiler(tiler)
+                    .outputHandler(outputHandler)
+                    .padding((int)Math.round(padding * downsample))
+                    .postProcess(postProcessor)
+                    .downsample(downsample)
+                    .build();
+
+            processor.processObjects(taskRunner, imageData, pathObjects);
+            int nObjects = pathObjects.stream().mapToInt(PathObject::nChildObjects).sum();
+            if (predictionProcessor instanceof TilePredictionProcessor tileProcessor) {
+                return new InstanSegResults(
+                        tileProcessor.getPixelsProcessedCount(),
+                        tileProcessor.getTilesProcessedCount(),
+                        tileProcessor.getTilesFailedCount(),
+                        nObjects,
+                        System.currentTimeMillis() - startTime,
+                        tileProcessor.wasInterrupted()
+                );
+            } else {
+                return InstanSegResults.emptyInstance();
+            }
+        } catch (BuildException | IOException | TaskException | InterruptedException ex) {
+            logger.error("Error running InstanSeg", ex);
             return new InstanSegResults(0, 0, 0, 0,
-                    System.currentTimeMillis() - startTime, e instanceof InterruptedException);
+                    System.currentTimeMillis() - startTime, ex instanceof InterruptedException);
+        } finally {
+            for (var predictor: predictors) {
+                predictor.close();
+            }
         }
     }
 
@@ -300,7 +278,7 @@ public class InstanSeg {
         return System.getProperty("instanseg.debug.tiles", "false").strip().equalsIgnoreCase("true");
     }
 
-    private static Processor<Mat, Mat, Mat[]> createProcessor(BlockingQueue<Predictor<Mat, Mat[]>> predictors,
+    private static Processor<Mat, Mat, Mat[]> createProcessor(BlockingQueue<ApposePredictor> predictors,
                                                             Collection<? extends ColorTransforms.ColorTransform> inputChannels,
                                                             int tileDims, boolean padToInputSize) {
         if (debugTiles())
@@ -384,26 +362,6 @@ public class InstanSeg {
     }
 
 
-    /**
-     * Print resource count for debugging purposes.
-     * If we are not logging at debug level, do nothing.
-     * @param title The name to be used in the log.
-     * @param manager The NDManager to print from.
-     */
-    private static void printResourceCount(String title, BaseNDManager manager) {
-        if (logger.isDebugEnabled()) {
-            try {
-                // This is broken in DJL v0.34.0
-                // See https://github.com/deepjavalibrary/djl/pull/3780
-                logger.debug(title);
-                manager.debugDump(2);
-            } catch (Exception e) {
-                LogTools.warnOnce(logger, "BaseNDManager.debugDump(2) failed with an exception");
-                logger.debug(e.getMessage(), e);
-            }
-        }
-    }
-
 
     /**
      * A builder class for InstanSeg.
@@ -421,7 +379,7 @@ public class InstanSeg {
         private int[] outputChannels = null;
         private boolean randomColors = true;
         private boolean makeMeasurements = false;
-        private Device device = Device.fromName("cpu");
+        private String device = "cpu";
         private TaskRunner taskRunner = TaskRunnerUtils.getDefaultInstance().createTaskRunner();
         private Collection<? extends ColorTransforms.ColorTransform> channels;
         private InstanSegModel model;
@@ -647,17 +605,7 @@ public class InstanSeg {
          * @return this builder
          */
         public Builder device(String deviceName) {
-            this.device = Device.fromName(deviceName);
-            return this;
-        }
-
-        /**
-         * Set the device to be used
-         * @param device The {@link Device} to be used
-         * @return this builder
-         */
-        public Builder device(Device device) {
-            this.device = device;
+            this.device = deviceName;
             return this;
         }
 

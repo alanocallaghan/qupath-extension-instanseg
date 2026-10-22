@@ -33,6 +33,7 @@ import javafx.scene.control.Tooltip;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.web.WebView;
+import org.apposed.appose.BuildException;
 import org.commonmark.renderer.html.HtmlRenderer;
 import org.controlsfx.control.CheckComboBox;
 import org.controlsfx.control.PopOver;
@@ -40,7 +41,6 @@ import org.controlsfx.control.SearchableComboBox;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.instanseg.core.InstanSegModel;
-import qupath.ext.instanseg.core.PytorchManager;
 import qupath.fx.dialogs.Dialogs;
 import qupath.fx.dialogs.FileChoosers;
 import qupath.fx.utils.FXUtils;
@@ -158,6 +158,7 @@ public class InstanSegController extends BorderPane {
 
     // Listener for property changes in the current ImageData; these can be required to update the input channels
     private final PropertyChangeListener imageDataPropertyChangeListener = this::handleImageDataPropertyChange;
+    private final ApposeManager apposeManager = new ApposeManager();
 
     /**
      * Create an instance of the InstanSeg GUI pane.
@@ -707,7 +708,7 @@ public class InstanSegController extends BorderPane {
 
     private void updateAvailableDevices() {
         // Update the available devices if these have changed
-        var available = Set.copyOf(PytorchManager.getAvailableDevices());
+        var available = apposeManager.listAvailableDevices();
         var items = Set.copyOf(deviceChoices.getItems());
         var selected = deviceChoices.getSelectionModel().getSelectedItem();
         if (!available.equals(items)) {
@@ -783,10 +784,15 @@ public class InstanSegController extends BorderPane {
             Dialogs.showWarningNotification(resources.getString("title"), resources.getString("error.no-pixel-size"));
         }
 
-        if (!PytorchManager.hasPyTorchEngine()) {
+        if (!apposeManager.isInitialized()) {
             if (!Dialogs.showConfirmDialog(resources.getString("title"), resources.getString("ui.pytorch"))) {
                 Dialogs.showWarningNotification(resources.getString("title"), resources.getString("ui.pytorch-popup"));
                 return;
+            }
+            try {
+                apposeManager.initialize();
+            } catch (BuildException e) {
+                throw new RuntimeException(e);
             }
         }
 
@@ -860,22 +866,17 @@ public class InstanSegController extends BorderPane {
     private boolean ensurePyTorchAvailable() {
         try {
             FXUtils.runOnApplicationThread(() -> requestingPyTorch.set(true));
-            if (PytorchManager.hasPyTorchEngine()) {
+            if (apposeManager.isInitialized()) {
                 return true;
             } else {
-                downloadPyTorch();
-                return PytorchManager.hasPyTorchEngine();
+                apposeManager.initialize();
+                return apposeManager.isInitialized();
             }
+        } catch (BuildException e) {
+            throw new RuntimeException(e);
         } finally {
             FXUtils.runOnApplicationThread(() -> requestingPyTorch.set(false));
         }
-    }
-
-
-    private void downloadPyTorch() {
-        FXUtils.runOnApplicationThread(() -> Dialogs.showInfoNotification(resources.getString("title"), resources.getString("ui.pytorch-downloading")));
-        PytorchManager.getEngineOnline();
-        FXUtils.runOnApplicationThread(this::updateAvailableDevices);
     }
 
     @FXML

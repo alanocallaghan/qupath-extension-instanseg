@@ -53,10 +53,7 @@ This extension is for **QuPath v0.6.0**. You can install the extension using QuP
 
 ## How do I _run_ InstanSeg in QuPath?
 
-There are two steps to get started:
-1. Use _Extensions → Deep Java Library → Manage DJL Engines_ to download PyTorch
-   - See [docs here](https://qupath.readthedocs.io/en/stable/docs/deep/djl.html#getting-started-with-qupath-djl) - especially if you want it to work with CUDA (which can be tricky to configure)
-2. Use _Extensions → InstanSeg → Run InstanSeg_ to launch InstanSeg
+Use _Extensions → InstanSeg → Run InstanSeg_ to launch InstanSeg
 
 The dialog should guide you through what to do next:
 1. Choose a directory on your computer to download pre-trained models
