@@ -1,18 +1,21 @@
 package qupath.ext.instanseg.core;
 
 import java.io.File;
-import java.io.InputStream;
+import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import org.apposed.appose.Appose;
 import org.apposed.appose.BuildException;
 import org.apposed.appose.Environment;
 import org.apposed.appose.TaskException;
+import org.apposed.appose.util.Environments;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,6 +23,22 @@ public class ApposeManager {
     private static final Logger logger = LoggerFactory.getLogger(ApposeManager.class);
 
     private ApposeManager() {}
+
+    public static List<String> listEnvs() {
+        String dir = Environments.apposeEnvsDir();
+        try (var fs = Files.list(Path.of(dir))) {
+            return fs.filter(p -> {
+                try {
+                    return !Files.isHidden(p);
+                } catch (IOException e) {
+                    return false;
+                }
+            }).map(Path::toString).toList();
+        } catch (IOException e) {
+            logger.error("Failed to list appose envs", e);
+            return Collections.emptyList();
+        }
+    }
 
     public static CompletableFuture<Environment> buildEnvironment(File file) {
         return CompletableFuture.supplyAsync(() -> {
@@ -32,7 +51,7 @@ public class ApposeManager {
                 }
         );
     }
-    
+
     public static CompletableFuture<Environment> buildEnvironment(URL url) {
         return CompletableFuture.supplyAsync(() -> {
                     try {
