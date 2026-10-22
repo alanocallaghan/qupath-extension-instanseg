@@ -33,13 +33,13 @@ import javafx.scene.control.Tooltip;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.web.WebView;
-import org.apposed.appose.BuildException;
 import org.commonmark.renderer.html.HtmlRenderer;
 import org.controlsfx.control.CheckComboBox;
 import org.controlsfx.control.PopOver;
 import org.controlsfx.control.SearchableComboBox;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.instanseg.core.ApposeManager;
 import qupath.ext.instanseg.core.InstanSegModel;
 import qupath.fx.dialogs.Dialogs;
 import qupath.fx.dialogs.FileChoosers;
@@ -158,7 +158,6 @@ public class InstanSegController extends BorderPane {
 
     // Listener for property changes in the current ImageData; these can be required to update the input channels
     private final PropertyChangeListener imageDataPropertyChangeListener = this::handleImageDataPropertyChange;
-    private final ApposeManager apposeManager = new ApposeManager();
 
     /**
      * Create an instance of the InstanSeg GUI pane.
@@ -708,23 +707,24 @@ public class InstanSegController extends BorderPane {
 
     private void updateAvailableDevices() {
         // Update the available devices if these have changed
-        var available = apposeManager.listAvailableDevices();
-        var items = Set.copyOf(deviceChoices.getItems());
-        var selected = deviceChoices.getSelectionModel().getSelectedItem();
-        if (!available.equals(items)) {
-            deviceChoices.getItems().setAll(available);
-        }
-        // Try to ensure we have something selected - without making unnecessary changes
-        if (selected == null) {
-            selected = InstanSegPreferences.preferredDeviceProperty().get();
-        } else if (Objects.equals(selected, deviceChoices.getSelectionModel().getSelectedItem())) {
-            return;
-        }
-        if (available.contains(selected)) {
-            deviceChoices.getSelectionModel().select(selected);
-        } else if (!available.isEmpty()) {
-            deviceChoices.getSelectionModel().selectFirst();
-        }
+        ApposeManager.listAvailableDevices().thenAcceptAsync(devices -> {
+            var items = Set.copyOf(deviceChoices.getItems());
+            var selected = deviceChoices.getSelectionModel().getSelectedItem();
+            if (!devices.equals(items)) {
+                deviceChoices.getItems().setAll(devices);
+            }
+            // Try to ensure we have something selected - without making unnecessary changes
+            if (selected == null) {
+                selected = InstanSegPreferences.preferredDeviceProperty().get();
+            } else if (Objects.equals(selected, deviceChoices.getSelectionModel().getSelectedItem())) {
+                return;
+            }
+            if (devices.contains(selected)) {
+                deviceChoices.getSelectionModel().select(selected);
+            } else if (!devices.isEmpty()) {
+                deviceChoices.getSelectionModel().selectFirst();
+            }
+        }, Platform::runLater);
     }
 
     private void configureRunMessageLabel() {
@@ -784,17 +784,18 @@ public class InstanSegController extends BorderPane {
             Dialogs.showWarningNotification(resources.getString("title"), resources.getString("error.no-pixel-size"));
         }
 
-        if (!apposeManager.isInitialized()) {
-            if (!Dialogs.showConfirmDialog(resources.getString("title"), resources.getString("ui.pytorch"))) {
-                Dialogs.showWarningNotification(resources.getString("title"), resources.getString("ui.pytorch-popup"));
-                return;
-            }
-            try {
-                apposeManager.initialize();
-            } catch (BuildException e) {
-                throw new RuntimeException(e);
-            }
-        }
+// todo ask to download...
+//        if () {
+//            if (!Dialogs.showConfirmDialog(resources.getString("title"), resources.getString("ui.pytorch"))) {
+//                Dialogs.showWarningNotification(resources.getString("title"), resources.getString("ui.pytorch-popup"));
+//                return;
+//            }
+//            try {
+//                apposeManager.initialize();
+//            } catch (BuildException e) {
+//                throw new RuntimeException(e);
+//            }
+//        }
 
         var modelPath = InstanSegUtils.getModelDirectory().orElse(null);
         if (modelPath == null) {
@@ -866,14 +867,7 @@ public class InstanSegController extends BorderPane {
     private boolean ensurePyTorchAvailable() {
         try {
             FXUtils.runOnApplicationThread(() -> requestingPyTorch.set(true));
-            if (apposeManager.isInitialized()) {
-                return true;
-            } else {
-                apposeManager.initialize();
-                return apposeManager.isInitialized();
-            }
-        } catch (BuildException e) {
-            throw new RuntimeException(e);
+            return true;
         } finally {
             FXUtils.runOnApplicationThread(() -> requestingPyTorch.set(false));
         }

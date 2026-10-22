@@ -16,12 +16,12 @@ import org.slf4j.LoggerFactory;
 
 public class ApposePredictor {
     private static final Logger logger = LoggerFactory.getLogger(ApposePredictor.class);
-    private Service python;
+    CompletableFuture<Service> env;
 
     private ApposePredictor(Path modelPath, String device) throws BuildException, IOException, TaskException, InterruptedException {
         logger.info("Creating environment");
-        Environment env = Appose.pixi(NDArrays.class.getResource("pixi.toml")).build();
-        String pythonScript = String.format("""
+        env = ApposeManager.buildEnvironment(this.getClass().getResource("pixi.toml")).thenApply(env -> {
+            String pythonScript = String.format("""
 from instanseg import InstanSeg
 from appose import NDArray
 import torch
@@ -30,9 +30,9 @@ import numpy as np
 model = torch.jit.load("%s")
 ins = InstanSeg(model, device="%s")
 """, modelPath.toString(), device);
-        logger.info("Starting task");
-        python = env.python().init(pythonScript);
-        python.task("pass").waitFor();
+            logger.info("Starting task");
+            return env.python().init(pythonScript);
+        });
     }
 
     static ApposePredictor create(Path modelPath, String device) throws BuildException, IOException, TaskException, InterruptedException {
@@ -60,39 +60,51 @@ task.outputs["instanseg_output"] = nda
         Map<String, Object> inputs = Map.of("ndarray", nda, "pixel_size", pixelSize);
         CompletableFuture<Mat> future = new CompletableFuture<>();
 
-        Service.Task task = python.task(script, inputs);
-        task.listen(event -> {
-            switch (event.responseType) {
-                case UPDATE:
-                    logger.info("Progress: " + event.current + "/" + event.maximum);
-                    break;
-                case COMPLETION:
-                    logger.info("Task complete. Result: " + task.outputs);
-                    var isOutput = (NDArray) task.outputs.get("instanseg_output");
-                    // todo: general method to convert back to mat or BI
-                    Mat matOutput = NDArrays.ndArrayToMat(isOutput);
-                    future.complete(matOutput);
-                    break;
-                case CANCELATION:
-                    logger.info("Task canceled");
-                    // todo exceptionally? and below
-                    future.complete(null);
-                    break;
-                case FAILURE:
-                    logger.error("Task failed: " + task.error);
-                    future.complete(null);
-                    break;
-                case CRASH:
-                    logger.error("Task crashed:" + task.error);
-                    future.complete(null);
-                    break;
+        return env.thenCompose(python -> {
+            try {
+                python.task(script, inputs)
+                    .listen(event -> {
+                        switch (event.responseType) {
+                            case UPDATE:
+                                logger.info("Progress: " + event.current + "/" + event.maximum);
+                                break;
+                            case COMPLETION:
+                                logger.info("Task complete. Result: " + event.task.outputs);
+                                var isOutput = (NDArray) event.task.outputs.get("instanseg_output");
+                                // todo: general method to convert back to mat or BI
+                                Mat matOutput = NDArrays.ndArrayToMat(isOutput);
+                                future.complete(matOutput);
+                                break;
+                            case CANCELATION:
+                                logger.info("Task canceled");
+                                // todo exceptionally? and below
+                                future.complete(null);
+                                break;
+                            case FAILURE:
+                                logger.error("Task failed: " + event.task.error);
+                                future.complete(null);
+                                break;
+                            case CRASH:
+                                logger.error("Task crashed:" + event.task.error);
+                                future.complete(null);
+                                break;
+                        }
+                    })
+                    .start()
+                    .waitFor();
+            } catch (InterruptedException | TaskException e) {
+                logger.error("Error running task", e);
+                future.complete(null);
             }
+            return future;
         });
-        task.start();
-        return future;
     }
 
     public void close() {
-        python.close();
+        if (!env.isDone()) {
+            env.cancel(true);
+            return;
+        }
+        env.join().close();
     }
 }
