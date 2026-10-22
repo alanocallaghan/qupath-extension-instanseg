@@ -1,6 +1,7 @@
 package qupath.ext.instanseg.core;
 
 import java.io.File;
+import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
@@ -31,8 +32,7 @@ public class ApposeManager {
                 }
         );
     }
-
-
+    
     public static CompletableFuture<Environment> buildEnvironment(URL url) {
         return CompletableFuture.supplyAsync(() -> {
                     try {
