@@ -9,15 +9,10 @@ python = "3.11.*"
 [pypi-dependencies]
 appose = "*"
 instanseg-torch = "*"
-
-[feature.cpu.pypi-dependencies]
-torch = { version = "*", index = "https://download.pytorch.org/whl/cpu" }
-torchvision = { version = "*", index = "https://download.pytorch.org/whl/cpu" }
-
-[feature.cuda.pypi-dependencies]
 torch = { version = "*", index = "https://download.pytorch.org/whl/cu132" }
 torchvision = { version = "*", index = "https://download.pytorch.org/whl/cu132" }
 
-[environments]
-default = [ "cpu" ]
-cuda = { features = ["cuda"], platforms = ["linux-64", "win-64"] }
+[target.osx-arm64.pypi-dependencies]
+torch = { version = "*", index = "https://download.pytorch.org/whl/cpu" }
+torchvision = { version = "*", index = "https://download.pytorch.org/whl/cpu" }
+
